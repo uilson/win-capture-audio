@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <optional>
 #include <tuple>
+#include <set>
 
 #include <windows.h>
 #include <wil/resource.h>
@@ -18,22 +19,30 @@
 
 #define SETTING_MODE                   "mode"
 
-#define SETTING_SESSION                "session"
+#define SETTING_EXECUTABLE_LIST        "executable_list"
 
-#define SETTING_EXCLUDE_PROCESS_TREE   "exclude_process_tree"
+#define SETTING_ACTIVE_SESSION_GROUP   "active_session_group"
+#define SETTING_ACTIVE_SESSION_LIST    "active_session_list"
+#define SETTING_ACTIVE_SESSION_ADD     "active_session_add"
+
+#define SETTING_EXCLUDE                "exclude"
 
 #define TEXT_NAME                      obs_module_text("Name")
 
 #define TEXT_MODE                      obs_module_text("Mode")
-#define TEXT_MODE_WINDOW               obs_module_text("Mode.Window")
+#define TEXT_MODE_SESSION              obs_module_text("Mode.Session")
 #define TEXT_MODE_HOTKEY               obs_module_text("Mode.Hotkey")
 
-#define TEXT_SESSION                   obs_module_text("Session")
+#define TEXT_EXECUTABLE_LIST           obs_module_text("ExecutableList")
+
+#define TEXT_ACTIVE_SESSION_GROUP      obs_module_text("ActiveSession.Group")
+#define TEXT_ACTIVE_SESSION_LIST       obs_module_text("ActiveSession.List")
+#define TEXT_ACTIVE_SESSION_ADD        obs_module_text("ActiveSession.Add")
+
+#define TEXT_EXCLUDE                   obs_module_text("Exclude")
 
 #define TEXT_HOTKEY_START              obs_module_text("Hotkey.Start")
 #define TEXT_HOTKEY_STOP               obs_module_text("Hotkey.Stop")
-
-#define TEXT_EXCLUDE_PROCESS_TREE      obs_module_text("ExcludeProcessTree")
 
 #define HOTKEY_START                   "hotkey_start"
 #define HOTKEY_STOP                    "hotkey_stop"
@@ -41,12 +50,7 @@
 /* clang-format on */
 
 namespace CaptureEvents {
-enum CaptureEvents {
-	Shutdown = WM_USER,
-	Update,
-	SessionAdded,
-	SessionExpired
-};
+enum CaptureEvents { Shutdown = WM_USER, Update, SessionAdded, SessionExpired };
 }
 
 enum mode { MODE_SESSION, MODE_HOTKEY };
@@ -54,27 +58,10 @@ enum mode { MODE_SESSION, MODE_HOTKEY };
 struct AudioCaptureConfig {
 	enum mode mode = MODE_SESSION;
 
-	std::optional<std::tuple<DWORD, std::string>> session;
+	std::set<std::string> executables;
 	HWND hotkey_window = NULL;
 
-	bool exclude_process_tree = false;
-
-	bool operator!=(const AudioCaptureConfig &other) const {
-		if (other.mode != mode)
-			return true;
-
-		if (other.exclude_process_tree != exclude_process_tree)
-			return true;
-
-		if (mode == MODE_HOTKEY)
-			return other.hotkey_window != hotkey_window;
-
-		return other.session != session;
-	}
-
-	bool operator==(const AudioCaptureConfig &other) const {
-		return !(*this != other);
-	}
+	bool exclude = false;
 };
 
 class AudioCapture {
@@ -89,13 +76,16 @@ private:
 	obs_hotkey_pair_id hotkey_pair;
 	obs_source_t *source;
 
+	WAVEFORMATEX format;
+	std::optional<Mixer> mixer;
+
 	std::optional<SessionMonitor> session_monitor;
-	std::optional<AudioCaptureHelper> helper;
+	std::set<DWORD> pids;
 
 	wil::critical_section sessions_section;
-	std::set<std::tuple<DWORD, std::string>> sessions;
+	std::unordered_map<SessionKey, std::string> sessions;
 
-	void StartCapture(DWORD pid, bool exclude);
+	void StartCapture(const std::set<DWORD> &new_pids);
 	void StopCapture();
 
 	void AddSession(const MSG &msg);
@@ -107,14 +97,22 @@ private:
 	void Run();
 
 public:
+	obs_source_t *GetSource() { return source; }
+
 	void Update(obs_data_t *settings);
-	std::set<std::tuple<DWORD, std::string>> GetSessions();
+	std::unordered_map<SessionKey, std::string> GetSessions();
 
 	static std::tuple<std::string, std::string>
-	MakeSessionOptionStrings(DWORD pid, const std::string &executable);
+	MakeSessionOptionStrings(std::set<DWORD> pids, const std::string &executable);
 
-	static std::tuple<DWORD, std::string>
-	ParseSessionOptionVal(const char *val);
+	void FillActiveSessionList(obs_property_t *session_list, obs_property_t *session_add);
+	std::set<std::string> GetExecutables(obs_data_t *settings);
+
+	bool IsUwpWindow(HWND window);
+	HWND GetUwpActualWindow(HWND parent_window);
+
+	void HotkeyStart();
+	void HotkeyStop();
 
 	AudioCapture(obs_data_t *settings, obs_source_t *source);
 	~AudioCapture();

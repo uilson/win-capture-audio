@@ -4,6 +4,7 @@
 #include <array>
 #include <functional>
 #include <thread>
+#include <set>
 
 #include <windows.h>
 
@@ -15,13 +16,13 @@
 #include <wrl/implements.h>
 #include <wil/com.h>
 
+#include "mixer.hpp"
 #include "common.hpp"
 
 using namespace Microsoft::WRL;
 
-struct CompletionHandler
-	: public RuntimeClass<RuntimeClassFlags<ClassicCom>, FtmBase,
-			      IActivateAudioInterfaceCompletionHandler> {
+struct CompletionHandler : public RuntimeClass<RuntimeClassFlags<ClassicCom>, FtmBase,
+					       IActivateAudioInterfaceCompletionHandler> {
 	wil::com_ptr<IAudioClient> client;
 
 	HRESULT activate_hr = E_FAIL;
@@ -34,8 +35,7 @@ struct CompletionHandler
 	{
 		auto set_finished = event_finished.SetEvent_scope_exit();
 
-		RETURN_IF_FAILED(operation->GetActivateResult(
-			&activate_hr, client.put_unknown()));
+		RETURN_IF_FAILED(operation->GetActivateResult(&activate_hr, client.put_unknown()));
 
 		if (FAILED(activate_hr))
 			error("activate failed (0x%lx)", activate_hr);
@@ -54,16 +54,17 @@ enum HelperEvents {
 
 class AudioCaptureHelper {
 private:
-	DWORD pid;
-	bool include_tree;
-
-	obs_source_t *source;
 	wil::unique_couninitialize_call couninit{wil::CoInitializeEx()};
+
+	DWORD pid;
+
+	wil::critical_section mixers_section;
+	std::set<Mixer *> mixers;
 
 	wil::com_ptr<IAudioClient> client;
 	wil::com_ptr<IAudioCaptureClient> capture_client;
 
-	wil::unique_cotaskmem_ptr<WAVEFORMATEX> format;
+	WAVEFORMATEX format;
 
 	std::array<wil::unique_event, HelperEvents::Count> events;
 	std::thread capture_thread;
@@ -71,18 +72,21 @@ private:
 	AUDIOCLIENT_ACTIVATION_PARAMS GetParams();
 	PROPVARIANT GetPropvariant(AUDIOCLIENT_ACTIVATION_PARAMS *params);
 
-	void InitFormat();
 	void InitClient();
-
 	void InitCapture();
 
-	void Capture();
+	void ForwardToMixers(UINT64 qpc_position, BYTE *data, UINT32 num_frames);
 	void ForwardPacket();
+
+	void Capture();
+	void CaptureSafe();
 
 public:
 	DWORD GetPid() { return pid; }
-	bool GetIncludeTree() { return include_tree; }
 
-	AudioCaptureHelper(obs_source_t *source, DWORD pid, bool include_tree);
+	AudioCaptureHelper(Mixer *mixer, WAVEFORMATEX format, DWORD pid);
 	~AudioCaptureHelper();
+
+	void RegisterMixer(Mixer *mixer);
+	bool UnRegisterMixer(Mixer *mixer);
 };
